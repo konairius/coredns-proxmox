@@ -59,8 +59,13 @@ proxmox {
   token_id coredns@pve!coredns
   token_secret xyaaaa-b4cd-cde5-abc4-1234567
   insecure false
+  interfaces INTERFACES...
+  networks NETWORKS...
 }
 ~~~
+* `insecure` disable the certificate check
+* `interfaces` limit the results to some interfaces
+* `networks` limit the results to some networks
 
 ## Metrics
 
@@ -76,7 +81,7 @@ This plugin reports readiness to the ready plugin. It will be immediately ready.
 
 ## Examples
 
-In this configuration, we very the certificate.
+In this configuration we limit the results to some interfaces
 
 ~~~ corefile
 . {
@@ -85,6 +90,23 @@ In this configuration, we very the certificate.
     token_id coredns@pve!coredns
     token_secret xyaaaa-b4cd-cde5-abc4-1234567
     insecure false
+    interfaces ens18 wg0
+  }
+  log
+}
+~~~
+
+Or to some interfaces and some networks
+
+~~~ corefile
+. {
+  proxmox {
+    backend https://proxmox.example.com:8006/api2/json/
+    token_id coredns@pve!coredns
+    token_secret xyaaaa-b4cd-cde5-abc4-1234567
+    insecure false
+    interfaces ens18 wg0
+    networks 10.10.10.0/24
   }
   log
 }

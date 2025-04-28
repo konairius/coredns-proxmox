@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/coredns/coredns/plugin"
@@ -21,6 +22,8 @@ type Proxmox struct {
 	TokenId     string
 	TokenSecret string
 	Insecure    string
+	Interfaces  []string
+	Networks    []string
 	Next        plugin.Handler
 }
 
@@ -176,6 +179,56 @@ func (p Proxmox) GetIPs(vmName string) (ips []net.IP, err error) {
 	return ips, nil
 }
 
+func FilterIPsInCIDRs(vmResult *VMNetworkInterfaceResult, cidrs []string) error {
+	var networks []*net.IPNet
+	for _, cidr := range cidrs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return err
+		}
+		networks = append(networks, network)
+	}
+
+	for i := range vmResult.Data.Result {
+		var filtered []IPAddress
+
+		for _, ipEntry := range vmResult.Data.Result[i].IpAddresses {
+			ip := net.ParseIP(ipEntry.IpAddress)
+			if ip == nil {
+				continue
+			}
+			if ipInAnyNetwork(ip, networks) {
+				filtered = append(filtered, ipEntry)
+			}
+		}
+
+		vmResult.Data.Result[i].IpAddresses = filtered
+	}
+
+	return nil
+}
+
+func ipInAnyNetwork(ip net.IP, networks []*net.IPNet) bool {
+	for _, network := range networks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func FilterInterfacesByName(vmResult *VMNetworkInterfaceResult, allowedNames []string) {
+	var filtered []VMNetworkInterface
+
+	for _, iface := range vmResult.Data.Result {
+		if slices.Contains(allowedNames, iface.Name) {
+			filtered = append(filtered, iface)
+		}
+	}
+
+	vmResult.Data.Result = filtered
+}
+
 func (p Proxmox) GetIPsById(node string, vmid int) (ips []net.IP, err error) {
 	requestBody := bytes.NewBufferString("")
 
@@ -207,6 +260,17 @@ func (p Proxmox) GetIPsById(node string, vmid int) (ips []net.IP, err error) {
 
 	ipResult := new([]net.IP)
 
+	if len(p.Interfaces) > 0 {
+		FilterInterfacesByName(&nodes, p.Interfaces)
+	}
+
+	if len(p.Networks) > 0 {
+		err = FilterIPsInCIDRs(&nodes, p.Networks)
+		if err != nil {
+			return
+		}
+	}
+
 	for _, netInterface := range nodes.Data.Result {
 		for _, addr := range netInterface.IpAddresses {
 			ip := net.ParseIP(addr.IpAddress)
@@ -214,6 +278,7 @@ func (p Proxmox) GetIPsById(node string, vmid int) (ips []net.IP, err error) {
 				*ipResult = append(*ipResult, ip)
 			}
 		}
+
 	}
 	ips = *ipResult
 	return
@@ -256,26 +321,30 @@ type VMInfo struct {
 
 type VMNetworkInterfaceResult struct {
 	Data struct {
-		Result []struct {
-			HardwareAddress string `json:"hardware-address"`
-			Name            string `json:"name"`
-			Statistics      struct {
-				TxDropped int   `json:"tx-dropped"`
-				TxBytes   int64 `json:"tx-bytes"`
-				TxPackets int   `json:"tx-packets"`
-				RxErrs    int   `json:"rx-errs"`
-				TxErrs    int   `json:"tx-errs"`
-				RxPackets int   `json:"rx-packets"`
-				RxBytes   int64 `json:"rx-bytes"`
-				RxDropped int   `json:"rx-dropped"`
-			} `json:"statistics"`
-			IpAddresses []struct {
-				IpAddressType string `json:"ip-address-type"`
-				Prefix        int    `json:"prefix"`
-				IpAddress     string `json:"ip-address"`
-			} `json:"ip-addresses"`
-		} `json:"result"`
+		Result []VMNetworkInterface `json:"result"`
 	} `json:"data"`
+}
+
+type VMNetworkInterface struct {
+	HardwareAddress string `json:"hardware-address"`
+	Name            string `json:"name"`
+	Statistics      struct {
+		TxDropped int   `json:"tx-dropped"`
+		TxBytes   int64 `json:"tx-bytes"`
+		TxPackets int   `json:"tx-packets"`
+		RxErrs    int   `json:"rx-errs"`
+		TxErrs    int   `json:"tx-errs"`
+		RxPackets int   `json:"rx-packets"`
+		RxBytes   int64 `json:"rx-bytes"`
+		RxDropped int   `json:"rx-dropped"`
+	} `json:"statistics"`
+	IpAddresses []IPAddress `json:"ip-addresses"`
+}
+
+type IPAddress struct {
+	IpAddressType string `json:"ip-address-type"`
+	Prefix        int    `json:"prefix"`
+	IpAddress     string `json:"ip-address"`
 }
 
 type NodeResponse struct {
